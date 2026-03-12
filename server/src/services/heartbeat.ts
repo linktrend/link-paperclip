@@ -20,6 +20,7 @@ import { publishLiveEvent } from "./live-events.js";
 import { getRunLogStore, type RunLogHandle } from "./run-log-store.js";
 import { getServerAdapter, runningProcesses } from "../adapters/index.js";
 import type { AdapterExecutionResult, AdapterInvocationMeta, AdapterSessionCodec } from "../adapters/index.js";
+import { createMissionAuditSyncService } from "./mission-audit-sync.js";
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { parseObject, asBoolean, asNumber, appendWithCap, MAX_EXCERPT_BYTES } from "../adapters/utils.js";
 import { secretService } from "./secrets.js";
@@ -38,6 +39,11 @@ import {
   parseProjectExecutionWorkspacePolicy,
   resolveExecutionWorkspaceMode,
 } from "./execution-workspace-policy.js";
+import {
+  assertAndSealTenantId,
+  buildValidatedMissionPayload,
+  readTenantIdValue,
+} from "./mission-contract.js";
 
 const MAX_LIVE_LOG_CHUNK_BYTES = 8 * 1024;
 const HEARTBEAT_MAX_CONCURRENT_RUNS_DEFAULT = 1;
@@ -301,18 +307,78 @@ function enrichWakeContextSnapshot(input: {
 function mergeCoalescedContextSnapshot(
   existingRaw: unknown,
   incoming: Record<string, unknown>,
+  expectedTenantId?: string,
 ) {
   const existing = parseObject(existingRaw);
+  const existingTenantId = readTenantIdValue(existing.tenant_id);
+  const incomingTenantId = readTenantIdValue(incoming.tenant_id);
+  if (
+    expectedTenantId &&
+    ((existingTenantId && existingTenantId !== expectedTenantId) ||
+      (incomingTenantId && incomingTenantId !== expectedTenantId))
+  ) {
+    throw conflict("Tenant isolation violation while merging mission context");
+  }
+
+  const tenantId = expectedTenantId ?? incomingTenantId ?? existingTenantId;
   const merged: Record<string, unknown> = {
     ...existing,
     ...incoming,
   };
+  if (tenantId) merged.tenant_id = tenantId;
   const commentId = deriveCommentId(incoming, null);
   if (commentId) {
     merged.commentId = commentId;
     merged.wakeCommentId = commentId;
   }
   return merged;
+}
+
+function withMissionContext(input: {
+  contextSnapshot: Record<string, unknown>;
+  payload: Record<string, unknown> | null;
+  tenantId: string;
+  runId: string;
+  fallbackTaskId: string;
+}) {
+  const { contextSnapshot, payload, tenantId, runId, fallbackTaskId } = input;
+  const missionPayload = buildValidatedMissionPayload({
+    missionId:
+      contextSnapshot.mission_id ??
+      contextSnapshot.missionId ??
+      payload?.mission_id ??
+      payload?.missionId,
+    tenantId,
+    dprId:
+      contextSnapshot.dpr_id ??
+      contextSnapshot.dprId ??
+      payload?.dpr_id ??
+      payload?.dprId,
+    goal: contextSnapshot.goal ?? payload?.goal ?? contextSnapshot.reason ?? "Mission dispatch",
+    status: contextSnapshot.status ?? payload?.status ?? "active",
+    runId,
+    taskId:
+      contextSnapshot.taskId ??
+      contextSnapshot.task_id ??
+      contextSnapshot.taskKey ??
+      contextSnapshot.issueId ??
+      payload?.taskId ??
+      payload?.task_id ??
+      payload?.taskKey ??
+      payload?.issueId ??
+      fallbackTaskId,
+  });
+
+  return {
+    ...contextSnapshot,
+    tenant_id: missionPayload.tenantId,
+    dpr_id: missionPayload.dprId,
+    mission_id: missionPayload.missionId,
+    mission_status: missionPayload.status,
+    mission_goal: missionPayload.goal,
+    mission_run_id: missionPayload.runId,
+    mission_task_id: missionPayload.taskId,
+  };
 }
 
 function runTaskKey(run: typeof heartbeatRuns.$inferSelect) {
@@ -420,8 +486,56 @@ function resolveNextSessionState(input: {
 
 export function heartbeatService(db: Db) {
   const runLogStore = getRunLogStore();
+  const missionAuditSync = createMissionAuditSyncService();
   const secretsSvc = secretService(db);
   const issuesSvc = issueService(db);
+
+  function normalizeMissionStatusForAudit(
+    runStatus: string,
+    metadata: Record<string, unknown>,
+  ): "active" | "paused" | "handover_pending" | "archived" {
+    const missionStatus = readNonEmptyString(metadata.mission_status ?? metadata.status);
+    if (
+      missionStatus === "active" ||
+      missionStatus === "paused" ||
+      missionStatus === "handover_pending" ||
+      missionStatus === "archived"
+    ) {
+      return missionStatus;
+    }
+    if (runStatus === "queued" || runStatus === "running" || runStatus === "succeeded") return "active";
+    if (runStatus === "paused") return "paused";
+    return "archived";
+  }
+
+  function toMissionAuditInput(run: typeof heartbeatRuns.$inferSelect) {
+    const metadata = parseObject(run.contextSnapshot);
+    return {
+      missionId: run.id,
+      tenantId: run.companyId,
+      status: normalizeMissionStatusForAudit(run.status, metadata),
+      agentId: run.agentId,
+      invocationSource: run.invocationSource ?? null,
+      triggerDetail: run.triggerDetail ?? null,
+      wakeupRequestId: run.wakeupRequestId ?? null,
+      startedAt: run.startedAt ? new Date(run.startedAt).toISOString() : null,
+      finishedAt: run.finishedAt ? new Date(run.finishedAt).toISOString() : null,
+      metadata,
+    };
+  }
+
+  function toMissionContract(run: typeof heartbeatRuns.$inferSelect) {
+    const metadata = parseObject(run.contextSnapshot);
+    return buildValidatedMissionPayload({
+      missionId: metadata.mission_id ?? metadata.missionId,
+      tenantId: run.companyId,
+      dprId: metadata.dpr_id ?? metadata.dprId,
+      goal: metadata.mission_goal ?? metadata.goal,
+      status: metadata.mission_status ?? metadata.status ?? "active",
+      runId: run.id,
+      taskId: metadata.mission_task_id ?? metadata.taskId ?? metadata.task_id ?? metadata.taskKey ?? metadata.issueId,
+    });
+  }
 
   async function getAgent(agentId: string) {
     return db
@@ -750,6 +864,7 @@ export function heartbeatService(db: Db) {
           finishedAt: updated.finishedAt ? new Date(updated.finishedAt).toISOString() : null,
         },
       });
+      await missionAuditSync.upsertMission(toMissionAuditInput(updated));
     }
 
     return updated;
@@ -859,6 +974,7 @@ export function heartbeatService(db: Db) {
         finishedAt: claimed.finishedAt ? new Date(claimed.finishedAt).toISOString() : null,
       },
     });
+    await missionAuditSync.upsertMission(toMissionAuditInput(claimed));
 
     await setWakeupStatus(claimed.wakeupRequestId, "claimed", { claimedAt });
     return claimed;
@@ -1080,7 +1196,11 @@ export function heartbeatService(db: Db) {
     }
 
     const runtime = await ensureRuntimeState(agent);
-    const context = parseObject(run.contextSnapshot);
+    const context = assertAndSealTenantId(
+      agent.companyId,
+      "mission context",
+      parseObject(run.contextSnapshot),
+    );
     const taskKey = deriveTaskKey(context, null);
     const sessionCodec = getAdapterSessionCodec(agent.adapterType);
     const issueId = readNonEmptyString(context.issueId);
@@ -1721,14 +1841,22 @@ export function heartbeatService(db: Db) {
         }
 
         const deferredPayload = parseObject(deferred.payload);
-        const deferredContextSeed = parseObject(deferredPayload[DEFERRED_WAKE_CONTEXT_KEY]);
+        const deferredContextSeed = assertAndSealTenantId(
+          deferredAgent.companyId,
+          "deferred mission context",
+          parseObject(deferredPayload[DEFERRED_WAKE_CONTEXT_KEY]),
+        );
         const promotedContextSeed: Record<string, unknown> = { ...deferredContextSeed };
         const promotedReason = readNonEmptyString(deferred.reason) ?? "issue_execution_promoted";
         const promotedSource =
           (readNonEmptyString(deferred.source) as WakeupOptions["source"]) ?? "automation";
         const promotedTriggerDetail =
           (readNonEmptyString(deferred.triggerDetail) as WakeupOptions["triggerDetail"]) ?? null;
-        const promotedPayload = deferredPayload;
+        const promotedPayload = assertAndSealTenantId(
+          deferredAgent.companyId,
+          "deferred mission payload",
+          deferredPayload,
+        );
         delete promotedPayload[DEFERRED_WAKE_CONTEXT_KEY];
 
         const {
@@ -1744,7 +1872,7 @@ export function heartbeatService(db: Db) {
 
         const sessionBefore = await resolveSessionBeforeForWakeup(deferredAgent, promotedTaskKey);
         const now = new Date();
-        const newRun = await tx
+        const insertedRun = await tx
           .insert(heartbeatRuns)
           .values({
             companyId: deferredAgent.companyId,
@@ -1758,6 +1886,22 @@ export function heartbeatService(db: Db) {
           })
           .returning()
           .then((rows) => rows[0]);
+        const missionContext = withMissionContext({
+          contextSnapshot: promotedContextSnapshot,
+          payload: promotedPayload,
+          tenantId: deferredAgent.companyId,
+          runId: insertedRun.id,
+          fallbackTaskId: issue.id,
+        });
+        const newRun = await tx
+          .update(heartbeatRuns)
+          .set({
+            contextSnapshot: missionContext,
+            updatedAt: now,
+          })
+          .where(eq(heartbeatRuns.id, insertedRun.id))
+          .returning()
+          .then((rows) => rows[0] ?? insertedRun);
 
         await tx
           .update(agentWakeupRequests)
@@ -1799,6 +1943,14 @@ export function heartbeatService(db: Db) {
         wakeupRequestId: promotedRun.wakeupRequestId,
       },
     });
+    await missionAuditSync.upsertMission(toMissionAuditInput(promotedRun));
+    const promotedMission = toMissionContract(promotedRun);
+    await missionAuditSync.logAuditRun({
+      runId: promotedMission.runId,
+      taskId: promotedMission.taskId,
+      dprId: promotedMission.dprId,
+      tenantId: promotedMission.tenantId,
+    });
 
     await startNextQueuedRunForAgent(promotedRun.agentId);
   }
@@ -1806,9 +1958,14 @@ export function heartbeatService(db: Db) {
   async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}) {
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
-    const contextSnapshot: Record<string, unknown> = { ...(opts.contextSnapshot ?? {}) };
+    const contextSnapshotSeed: Record<string, unknown> = { ...(opts.contextSnapshot ?? {}) };
     const reason = opts.reason ?? null;
-    const payload = opts.payload ?? null;
+    const payloadSeed = opts.payload ?? null;
+
+    const agent = await getAgent(agentId);
+    if (!agent) throw notFound("Agent not found");
+    const payload = assertAndSealTenantId(agent.companyId, "mission payload", payloadSeed);
+    const contextSnapshot = assertAndSealTenantId(agent.companyId, "mission context", contextSnapshotSeed);
     const {
       contextSnapshot: enrichedContextSnapshot,
       issueIdFromPayload,
@@ -1822,9 +1979,6 @@ export function heartbeatService(db: Db) {
       payload,
     });
     const issueId = readNonEmptyString(enrichedContextSnapshot.issueId) ?? issueIdFromPayload;
-
-    const agent = await getAgent(agentId);
-    if (!agent) throw notFound("Agent not found");
 
     if (
       agent.status === "paused" ||
@@ -1982,6 +2136,7 @@ export function heartbeatService(db: Db) {
             const mergedContextSnapshot = mergeCoalescedContextSnapshot(
               activeExecutionRun.contextSnapshot,
               enrichedContextSnapshot,
+              agent.companyId,
             );
             const mergedRun = await tx
               .update(heartbeatRuns)
@@ -2039,6 +2194,7 @@ export function heartbeatService(db: Db) {
             const mergedDeferredContext = mergeCoalescedContextSnapshot(
               existingDeferredContext,
               enrichedContextSnapshot,
+              agent.companyId,
             );
             const mergedDeferredPayload = {
               ...existingDeferredPayload,
@@ -2092,7 +2248,7 @@ export function heartbeatService(db: Db) {
           .returning()
           .then((rows) => rows[0]);
 
-        const newRun = await tx
+        const insertedRun = await tx
           .insert(heartbeatRuns)
           .values({
             companyId: agent.companyId,
@@ -2106,6 +2262,22 @@ export function heartbeatService(db: Db) {
           })
           .returning()
           .then((rows) => rows[0]);
+        const missionContext = withMissionContext({
+          contextSnapshot: enrichedContextSnapshot,
+          payload,
+          tenantId: agent.companyId,
+          runId: insertedRun.id,
+          fallbackTaskId: issue.id,
+        });
+        const newRun = await tx
+          .update(heartbeatRuns)
+          .set({
+            contextSnapshot: missionContext,
+            updatedAt: new Date(),
+          })
+          .where(eq(heartbeatRuns.id, insertedRun.id))
+          .returning()
+          .then((rows) => rows[0] ?? insertedRun);
 
         await tx
           .update(agentWakeupRequests)
@@ -2143,6 +2315,14 @@ export function heartbeatService(db: Db) {
           wakeupRequestId: newRun.wakeupRequestId,
         },
       });
+      await missionAuditSync.upsertMission(toMissionAuditInput(newRun));
+      const mission = toMissionContract(newRun);
+      await missionAuditSync.logAuditRun({
+        runId: mission.runId,
+        taskId: mission.taskId,
+        dprId: mission.dprId,
+        tenantId: mission.tenantId,
+      });
 
       await startNextQueuedRunForAgent(agent.id);
       return newRun;
@@ -2171,6 +2351,7 @@ export function heartbeatService(db: Db) {
       const mergedContextSnapshot = mergeCoalescedContextSnapshot(
         coalescedTargetRun.contextSnapshot,
         contextSnapshot,
+        agent.companyId,
       );
       const mergedRun = await db
         .update(heartbeatRuns)
@@ -2219,7 +2400,7 @@ export function heartbeatService(db: Db) {
 
     const sessionBefore = await resolveSessionBeforeForWakeup(agent, taskKey);
 
-    const newRun = await db
+    const insertedRun = await db
       .insert(heartbeatRuns)
       .values({
         companyId: agent.companyId,
@@ -2233,6 +2414,22 @@ export function heartbeatService(db: Db) {
       })
       .returning()
       .then((rows) => rows[0]);
+    const missionContext = withMissionContext({
+      contextSnapshot: enrichedContextSnapshot,
+      payload,
+      tenantId: agent.companyId,
+      runId: insertedRun.id,
+      fallbackTaskId: taskKey ?? agent.id,
+    });
+    const newRun = await db
+      .update(heartbeatRuns)
+      .set({
+        contextSnapshot: missionContext,
+        updatedAt: new Date(),
+      })
+      .where(eq(heartbeatRuns.id, insertedRun.id))
+      .returning()
+      .then((rows) => rows[0] ?? insertedRun);
 
     await db
       .update(agentWakeupRequests)
@@ -2252,6 +2449,14 @@ export function heartbeatService(db: Db) {
         triggerDetail: newRun.triggerDetail,
         wakeupRequestId: newRun.wakeupRequestId,
       },
+    });
+    await missionAuditSync.upsertMission(toMissionAuditInput(newRun));
+    const mission = toMissionContract(newRun);
+    await missionAuditSync.logAuditRun({
+      runId: mission.runId,
+      taskId: mission.taskId,
+      dprId: mission.dprId,
+      tenantId: mission.tenantId,
     });
 
     await startNextQueuedRunForAgent(agent.id);
