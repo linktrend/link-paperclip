@@ -60,6 +60,9 @@ export interface Config {
   storageS3ForcePathStyle: boolean;
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
+  gsmProviderId: string;
+  linkbrainMissionAuditEnabled: boolean;
+  linkbrainSharedMemoryRpcUrl: string | null;
   companyDeletionEnabled: boolean;
 }
 
@@ -200,6 +203,14 @@ export function loadConfig(): Config {
       fileDatabaseBackup?.dir ??
       resolveDefaultBackupDir(),
   );
+  const linkbrainSharedMemoryRpcUrl = (
+    process.env.PAPERCLIP_LINKBRAIN_SHARED_MEMORY_RPC_URL ??
+    process.env.LINKBRAIN_SHARED_MEMORY_UPSERT_MISSION_RPC_URL ??
+    process.env.PAPERCLIP_LINKBRAIN_RPC_URL ??
+    ""
+  ).trim();
+  const linkbrainMissionAuditEnabled = process.env.PAPERCLIP_LINKBRAIN_MISSION_AUDIT_ENABLED === "true";
+  const gsmProviderId = (process.env.PAPERCLIP_GSM_PROVIDER_ID ?? "linklogic_env").trim() || "linklogic_env";
 
   return {
     deploymentMode,
@@ -242,6 +253,9 @@ export function loadConfig(): Config {
     storageS3ForcePathStyle,
     heartbeatSchedulerEnabled: process.env.HEARTBEAT_SCHEDULER_ENABLED !== "false",
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
+    gsmProviderId,
+    linkbrainMissionAuditEnabled,
+    linkbrainSharedMemoryRpcUrl: linkbrainSharedMemoryRpcUrl.length > 0 ? linkbrainSharedMemoryRpcUrl : null,
     companyDeletionEnabled,
   };
 }
