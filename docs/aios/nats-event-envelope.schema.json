@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://linktrend.ai/schemas/aios/nats-event-envelope.schema.json",
+  "title": "AIOS NATS Event Envelope",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "occurred_at",
+    "schema_version",
+    "tenant_id",
+    "mission_id",
+    "run_id",
+    "task_id",
+    "from_dpr_id",
+    "to_dpr_id",
+    "correlation_id",
+    "idempotency_key",
+    "payload"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "aios.task.created",
+        "aios.task.assigned",
+        "aios.task.accepted",
+        "aios.task.progress",
+        "aios.task.handoff",
+        "aios.task.completed",
+        "aios.task.failed",
+        "aios.approval.requested",
+        "aios.approval.decided",
+        "aios.security.exception"
+      ]
+    },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "schema_version": { "type": "string", "minLength": 1 },
+    "tenant_id": { "type": "string", "format": "uuid" },
+    "mission_id": { "type": "string", "format": "uuid" },
+    "run_id": { "type": "string", "minLength": 8 },
+    "task_id": { "type": "string", "minLength": 3 },
+    "from_dpr_id": { "type": "string", "minLength": 3 },
+    "to_dpr_id": { "type": ["string", "null"], "minLength": 3 },
+    "correlation_id": { "type": "string", "minLength": 8 },
+    "idempotency_key": { "type": "string", "minLength": 8 },
+    "payload": { "type": "object" }
+  },
+  "additionalProperties": false
+}

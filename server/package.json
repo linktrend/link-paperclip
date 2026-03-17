@@ -30,6 +30,7 @@
     "postpack": "rm -rf ui-dist",
     "clean": "rm -rf dist",
     "start": "node dist/index.js",
+    "nats:bootstrap": "tsx src/nats/bootstrap.ts",
     "typecheck": "pnpm --filter @paperclipai/plugin-sdk build && tsc --noEmit"
   },
   "dependencies": {
@@ -41,7 +42,6 @@
     "@paperclipai/adapter-openclaw-gateway": "workspace:*",
     "@paperclipai/adapter-opencode-local": "workspace:*",
     "@paperclipai/adapter-pi-local": "workspace:*",
-    "hermes-paperclip-adapter": "0.1.1",
     "@paperclipai/adapter-utils": "workspace:*",
     "@paperclipai/db": "workspace:*",
     "@paperclipai/plugin-sdk": "workspace:*",
@@ -56,8 +56,10 @@
     "drizzle-orm": "^0.38.4",
     "embedded-postgres": "^18.1.0-beta.16",
     "express": "^5.1.0",
+    "hermes-paperclip-adapter": "0.1.1",
     "jsdom": "^28.1.0",
     "multer": "^2.0.2",
+    "nats": "2.29.3",
     "open": "^11.0.0",
     "pino": "^9.6.0",
     "pino-http": "^10.4.0",
