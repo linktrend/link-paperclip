@@ -98,6 +98,13 @@ export const personaApi = {
     );
   },
 
+  applyV1(companyId: string, payload: JsonRecord) {
+    return api.post<{ accepted: boolean; seededCount: number; seeded: JsonRecord[]; compile: JsonRecord | null }>(
+      withCompany(companyId, "/persona/migration/apply-v1"),
+      payload
+    );
+  },
+
   compileAll(companyId: string, payload: JsonRecord) {
     return api.post<{ accepted: boolean; compiledCount: number; compiled: JsonRecord[] }>(
       withCompany(companyId, "/persona/migration/compile-all"),

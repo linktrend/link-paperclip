@@ -17,6 +17,7 @@ export function PersonaControl() {
   const [selectedEntityId, setSelectedEntityId] = useState("");
   const [compileDprId, setCompileDprId] = useState("");
   const [operationOutput, setOperationOutput] = useState<string>("");
+  const [policyPackage, setPolicyPackage] = useState("");
 
   const [createForm, setCreateForm] = useState({
     contentKind: "soul",
@@ -117,6 +118,19 @@ export function PersonaControl() {
 
   const importMutation = useMutation({
     mutationFn: () => personaApi.importLocal(selectedCompanyId!, { publishImported: false }),
+    onSuccess: (data) => {
+      setOperationOutput(JSON.stringify(data, null, 2));
+      invalidatePersonaQueries();
+    }
+  });
+
+  const applyV1Mutation = useMutation({
+    mutationFn: () =>
+      personaApi.applyV1(selectedCompanyId!, {
+        includeBirthDateInUserFile: false,
+        policyPackage: policyPackage.trim() || undefined,
+        compileAfterPublish: true
+      }),
     onSuccess: (data) => {
       setOperationOutput(JSON.stringify(data, null, 2));
       invalidatePersonaQueries();
@@ -493,7 +507,19 @@ export function PersonaControl() {
       <section className="grid gap-6 lg:grid-cols-3">
         <div className="rounded-lg border border-border bg-card p-4">
           <h3 className="font-semibold">Migration Ops</h3>
+          <div className="mt-3">
+            <label className="text-xs text-muted-foreground">Policy Package (optional)</label>
+            <input
+              className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-sm"
+              value={policyPackage}
+              onChange={(event) => setPolicyPackage(event.target.value)}
+              placeholder="agent_persona_policy_YYMMDD"
+            />
+          </div>
           <div className="mt-3 flex flex-wrap gap-2">
+            <button className="rounded border border-border px-3 py-1 text-sm" onClick={() => applyV1Mutation.mutate()}>
+              Apply v1 + Compile
+            </button>
             <button className="rounded border border-border px-3 py-1 text-sm" onClick={() => importMutation.mutate()}>
               Import Local
             </button>

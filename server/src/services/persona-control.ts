@@ -162,6 +162,14 @@ export function personaControlService() {
       });
     },
 
+    applyV1(body: JsonRecord) {
+      return request<{ accepted: boolean; seededCount: number; seeded: JsonRecord[]; compile: JsonRecord | null }>({
+        method: "POST",
+        path: "/persona/migration/apply-v1",
+        body: { ...body, tenantId: config.aiosTenantId }
+      });
+    },
+
     compileAll(body: JsonRecord) {
       return request<{ accepted: boolean; compiledCount: number; compiled: JsonRecord[] }>({
         method: "POST",

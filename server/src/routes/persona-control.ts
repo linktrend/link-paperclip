@@ -52,6 +52,12 @@ const IMPORT_SCHEMA = z.object({
   publishImported: z.boolean().optional()
 });
 
+const APPLY_V1_SCHEMA = z.object({
+  includeBirthDateInUserFile: z.boolean().optional(),
+  policyPackage: z.string().min(1).optional(),
+  compileAfterPublish: z.boolean().optional()
+});
+
 const SYNC_ACK_SCHEMA = z.object({
   dprId: z.string().min(3),
   acknowledgedRevisionHash: z.string().min(16),
@@ -284,6 +290,25 @@ export function personaControlRoutes(_db: Db) {
       return res.status(202).json(payload);
     } catch (error) {
       return res.status(500).json({ error: error instanceof Error ? error.message : "Failed to import persona files" });
+    }
+  });
+
+  router.post("/companies/:companyId/persona/migration/apply-v1", async (req, res) => {
+    const parsed = APPLY_V1_SCHEMA.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
+    }
+
+    try {
+      assertWriteAccess(req, req.params.companyId);
+      const actor = getActorInfo(req);
+      const payload = await personaControl.applyV1({
+        ...parsed.data,
+        actorDprId: actor.actorId
+      });
+      return res.status(202).json(payload);
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : "Failed to apply persona v1 seed" });
     }
   });
 
