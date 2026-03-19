@@ -26,6 +26,11 @@ const keyAliases: Record<GsmSystemKey, string[]> = {
     "PAPERCLIP_LINKBRAIN_SYSTEM_API_KEY",
     "PAPERCLIP_LINKBRAIN_API_KEY",
   ],
+  aios_ingress_token: [
+    "AIOS_INGRESS_TOKEN",
+    "PAPERCLIP_AIOS_INGRESS_TOKEN",
+    "LINKLOGIC_GSM_AIOS_INGRESS_TOKEN",
+  ],
 };
 
 export const linklogicEnvGsmProvider: GsmProvider = {
