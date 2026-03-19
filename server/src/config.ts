@@ -72,6 +72,8 @@ export interface Config {
   gsmProviderId: string;
   linkbrainMissionAuditEnabled: boolean;
   linkbrainSharedMemoryRpcUrl: string | null;
+  aiosBaseUrl: string;
+  aiosTenantId: string;
   companyDeletionEnabled: boolean;
 }
 
@@ -220,6 +222,11 @@ export function loadConfig(): Config {
   ).trim();
   const linkbrainMissionAuditEnabled = process.env.PAPERCLIP_LINKBRAIN_MISSION_AUDIT_ENABLED === "true";
   const gsmProviderId = (process.env.PAPERCLIP_GSM_PROVIDER_ID ?? "linklogic_env").trim() || "linklogic_env";
+  const aiosBaseUrl = (process.env.PAPERCLIP_AIOS_BASE_URL ?? "http://127.0.0.1:4000").trim();
+  const aiosTenantId = (
+    process.env.PAPERCLIP_AIOS_TENANT_ID ??
+    "00000000-0000-0000-0000-000000000001"
+  ).trim();
 
   return {
     deploymentMode,
@@ -265,6 +272,8 @@ export function loadConfig(): Config {
     gsmProviderId,
     linkbrainMissionAuditEnabled,
     linkbrainSharedMemoryRpcUrl: linkbrainSharedMemoryRpcUrl.length > 0 ? linkbrainSharedMemoryRpcUrl : null,
+    aiosBaseUrl,
+    aiosTenantId,
     companyDeletionEnabled,
   };
 }
