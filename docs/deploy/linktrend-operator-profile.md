@@ -24,3 +24,7 @@ This profile is the required Paperclip runtime posture for LiNKtrend production.
 - Unauthenticated direct access to Paperclip UI/API must fail.
 - Audit log retrieval from activity endpoints must work.
 - Backup command and restore rehearsal must be documented for each release.
+
+## Supabase alignment note
+- If Paperclip is deployed against Supabase in the shared internal project, use a dedicated schema namespace (`paperclip_core`) and a dedicated runtime DB role.
+- Do not grant Paperclip runtime direct write access to LiNKbrain/LiNKskills/LiNKautowork/LiNKsites schemas.
