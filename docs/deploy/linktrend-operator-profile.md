@@ -1,5 +1,8 @@
 # LiNKtrend Operator Deployment Profile
 
+Owner: LiNKtrend Platform  
+Last updated: 2026-04-01
+
 This profile is the required Paperclip runtime posture for LiNKtrend production.
 
 ## Required runtime mode
