@@ -7,6 +7,7 @@ import type { Db } from "@paperclipai/db";
 import { agentApiKeys, companyMemberships, instanceUserRoles } from "@paperclipai/db";
 import type { DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
+import { resolveTrustedProxyEmailFromIncoming } from "../auth/proxy-auth.js";
 import { logger } from "../middleware/logger.js";
 import { subscribeCompanyLiveEvents } from "../services/live-events.js";
 
@@ -121,7 +122,7 @@ async function authorizeUpgrade(
     }
 
     const session = await opts.resolveSessionFromHeaders(headersFromIncomingMessage(req));
-    const userId = session?.user?.id;
+    const userId = session?.user?.id ?? resolveTrustedProxyEmailFromIncoming(req);
     if (!userId) return null;
 
     const [roleRow, memberships] = await Promise.all([
