@@ -557,10 +557,18 @@ export function agentRoutes(db: Db) {
     requestedDesiredSkills: string[] | undefined,
   ) {
     if (!requestedDesiredSkills) {
+      const allCompanySkillKeys = (await companySkills.list(companyId)).map((skill) => skill.key);
+      const runtimeSkillEntries = await companySkills.listRuntimeSkillEntries(companyId, {
+        materializeMissing: shouldMaterializeRuntimeSkillsForAdapter(adapterType),
+      });
+      const requiredSkills = runtimeSkillEntries
+        .filter((entry) => entry.required)
+        .map((entry) => entry.key);
+      const desiredSkills = Array.from(new Set([...requiredSkills, ...allCompanySkillKeys]));
       return {
-        adapterConfig,
-        desiredSkills: null as string[] | null,
-        runtimeSkillEntries: null as Awaited<ReturnType<typeof companySkills.listRuntimeSkillEntries>> | null,
+        adapterConfig: writePaperclipSkillSyncPreference(adapterConfig, desiredSkills),
+        desiredSkills,
+        runtimeSkillEntries,
       };
     }
 
