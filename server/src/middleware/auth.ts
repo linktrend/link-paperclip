@@ -6,6 +6,7 @@ import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@pa
 import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
 import type { DeploymentMode } from "@paperclipai/shared";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
+import { resolveTrustedProxyEmailFromExpress } from "../auth/proxy-auth.js";
 import { logger } from "./logger.js";
 import { boardAuthService } from "../services/board-auth.js";
 
@@ -64,6 +65,20 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
             userId,
             companyIds: memberships.map((row) => row.companyId),
             isInstanceAdmin: Boolean(roleRow),
+            runId: runIdHeader ?? undefined,
+            source: "session",
+          };
+          next();
+          return;
+        }
+
+        const trustedProxyEmail = resolveTrustedProxyEmailFromExpress(req);
+        if (trustedProxyEmail) {
+          req.actor = {
+            type: "board",
+            userId: trustedProxyEmail,
+            companyIds: undefined,
+            isInstanceAdmin: true,
             runId: runIdHeader ?? undefined,
             source: "session",
           };

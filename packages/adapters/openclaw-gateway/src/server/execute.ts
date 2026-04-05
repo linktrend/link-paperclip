@@ -73,6 +73,14 @@ type GatewayClientOptions = {
   onLog: AdapterExecutionContext["onLog"];
 };
 
+type OrchestrationModelProfile = {
+  reasoningModel: string;
+  contextModel: string;
+  executionModel: string;
+  reviewModel: string;
+  heartbeatModel: string | null;
+};
+
 type GatewayClientRequestOptions = {
   timeoutMs: number;
   expectFinal?: boolean;
@@ -336,7 +344,6 @@ function buildPaperclipEnvForWake(ctx: AdapterExecutionContext, wakePayload: Wak
 }
 
 function buildWakeText(payload: WakePayload, paperclipEnv: Record<string, string>): string {
-  const claimedApiKeyPath = "~/.openclaw/workspace/paperclip-claimed-api-key.json";
   const orderedKeys = [
     "PAPERCLIP_RUN_ID",
     "PAPERCLIP_AGENT_ID",
@@ -360,6 +367,8 @@ function buildWakeText(payload: WakePayload, paperclipEnv: Record<string, string
   const issueIdHint = payload.taskId ?? payload.issueId ?? "";
   const apiBaseHint = paperclipEnv.PAPERCLIP_API_URL ?? "<set PAPERCLIP_API_URL>";
 
+  const hasTaskContext = Boolean(payload.taskId || payload.issueId || payload.issueIds.length > 0);
+
   const lines = [
     "Paperclip wake event for a cloud adapter.",
     "",
@@ -367,9 +376,6 @@ function buildWakeText(payload: WakePayload, paperclipEnv: Record<string, string
     "",
     "Set these values in your run context:",
     ...envLines,
-    `PAPERCLIP_API_KEY=<token from ${claimedApiKeyPath}>`,
-    "",
-    `Load PAPERCLIP_API_KEY from ${claimedApiKeyPath} (the token you saved after claim-api-key).`,
     "",
     `api_base=${apiBaseHint}`,
     `task_id=${payload.taskId ?? ""}`,
@@ -380,33 +386,28 @@ function buildWakeText(payload: WakePayload, paperclipEnv: Record<string, string
     `approval_status=${payload.approvalStatus ?? ""}`,
     `linked_issue_ids=${payload.issueIds.join(",")}`,
     "",
-    "HTTP rules:",
-    "- Use Authorization: Bearer $PAPERCLIP_API_KEY on every API call.",
-    "- Use X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID on every mutating API call.",
-    "- Use only /api endpoints listed below.",
-    "- Do NOT call guessed endpoints like /api/cloud-adapter/*, /api/cloud-adapters/*, /api/adapters/cloud/*, or /api/heartbeat.",
+    "Execution rules:",
+    "- Do not block on extra Paperclip API credentials; they are not required for normal task completion in this path.",
+    "- If additional data is missing, continue with best-effort execution and explicitly report assumptions.",
     "",
-    "Workflow:",
-    "1) GET /api/agents/me",
-    `2) Determine issueId: PAPERCLIP_TASK_ID if present, otherwise issue_id (${issueIdHint}).`,
-    "3) If issueId exists:",
-    "   - POST /api/issues/{issueId}/checkout with {\"agentId\":\"$PAPERCLIP_AGENT_ID\",\"expectedStatuses\":[\"todo\",\"backlog\",\"blocked\"]}",
-    "   - GET /api/issues/{issueId}",
-    "   - GET /api/issues/{issueId}/comments",
-    "   - Execute the issue instructions exactly.",
-    "   - If instructions require a comment, POST /api/issues/{issueId}/comments with {\"body\":\"...\"}.",
-    "   - PATCH /api/issues/{issueId} with {\"status\":\"done\",\"comment\":\"what changed and why\"}.",
-    "4) If issueId does not exist:",
-    "   - GET /api/companies/$PAPERCLIP_COMPANY_ID/issues?assigneeAgentId=$PAPERCLIP_AGENT_ID&status=todo,in_progress,blocked",
-    "   - Pick in_progress first, then todo, then blocked, then execute step 3.",
-    "",
-    "Useful endpoints for issue work:",
-    "- POST /api/issues/{issueId}/comments",
-    "- PATCH /api/issues/{issueId}",
-    "- POST /api/companies/{companyId}/issues (when asked to create a new issue)",
-    "",
-    "Complete the workflow in this run.",
   ];
+
+  if (hasTaskContext) {
+    lines.push(
+      "Workflow:",
+      `1) Determine issueId: PAPERCLIP_TASK_ID if present, otherwise issue_id (${issueIdHint}).`,
+      "2) Execute the issue instructions exactly.",
+      "3) If execution fails, retry with improved approach; only escalate after multiple attempts with explicit reasons.",
+      "4) Return completion summary and next actions.",
+    );
+  } else {
+    lines.push(
+      "Workflow (heartbeat/no-task mode):",
+      "1) Run a concise operational self-check: runtime health, tool readiness, and blocker scan.",
+      "2) Do not attempt issue checkout or Paperclip API task fetch in this mode.",
+      "3) Return a short HEARTBEAT_OK status with readiness summary and any blockers.",
+    );
+  }
   return lines.join("\n");
 }
 
@@ -464,6 +465,221 @@ function buildStandardPaperclipPayload(
   return {
     ...templatePaperclip,
     ...standardPaperclip,
+  };
+}
+
+function resolveLisaDprId(ctx: AdapterExecutionContext): string | null {
+  const context = asRecord(ctx.context);
+  const fromContext =
+    nonEmpty(context?.dpr_id) ??
+    nonEmpty(context?.dprId) ??
+    nonEmpty(context?.fromDprId) ??
+    nonEmpty(context?.from_dpr_id);
+  return fromContext;
+}
+
+function resolveTaskPrompt(ctx: AdapterExecutionContext, templateMessage: string | null, wakeText: string): string {
+  const context = asRecord(ctx.context);
+  const fromContext =
+    nonEmpty(context?.task_prompt) ??
+    nonEmpty(context?.taskPrompt) ??
+    nonEmpty(context?.summary) ??
+    nonEmpty(context?.mission_goal);
+  if (fromContext) return fromContext;
+  if (templateMessage) return templateMessage;
+  return wakeText;
+}
+
+function resolveContextRefs(ctx: AdapterExecutionContext): string[] {
+  const context = asRecord(ctx.context);
+  const refs = Array.isArray(context?.contextRefs)
+    ? context.contextRefs
+    : Array.isArray(context?.context_refs)
+      ? context.context_refs
+      : [];
+  return refs
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function stringifyPlanForPrompt(input: {
+  sequence: Array<{ role: string; model: string; objective: string }>;
+  reviewEnabled: boolean;
+  reviewMaxLoops: number;
+  reviewModel: string;
+  decisionReason: string | null;
+}): string {
+  const lines = [
+    "AUTOMATIC ORCHESTRATION POLICY (LiNKaios)",
+    "Follow this phase plan for this task.",
+    ...input.sequence.map(
+      (phase, index) =>
+        `${index + 1}. ${phase.role.toUpperCase()} via ${phase.model} — ${phase.objective}`,
+    ),
+  ];
+  if (input.reviewEnabled) {
+    lines.push(
+      `Review loop: enabled (max loops: ${input.reviewMaxLoops}, reviewer model: ${input.reviewModel}).`,
+    );
+  } else {
+    lines.push("Review loop: disabled.");
+  }
+  if (input.decisionReason) {
+    lines.push(`Policy rationale: ${input.decisionReason}`);
+  }
+  lines.push(
+    "If output fails review, iterate within max loops; if still failing, escalate with explicit failure reasons and attempted remediations.",
+  );
+  return lines.join("\n");
+}
+
+function resolveModel(value: unknown, fallback: string): string {
+  return nonEmpty(value) ?? fallback;
+}
+
+function resolveOrchestrationModelProfile(ctx: AdapterExecutionContext): OrchestrationModelProfile {
+  const profile = parseObject(ctx.config.orchestrationModelProfile);
+  const defaults = {
+    reasoning: resolveModel(
+      process.env.LINK_LISA_REASONING_MODEL,
+      "moonshot/kimi-k2.5",
+    ),
+    context: resolveModel(
+      process.env.LINK_LISA_CONTEXT_MODEL,
+      "google/gemini-1.5-pro",
+    ),
+    execution: resolveModel(
+      process.env.LINK_LISA_EXECUTION_MODEL,
+      "openai/gpt-4o-mini",
+    ),
+    review: resolveModel(
+      process.env.LINK_LISA_REVIEW_MODEL,
+      "moonshot/kimi-k2.5",
+    ),
+    heartbeat: nonEmpty(process.env.LINK_LISA_HEARTBEAT_MODEL) ?? "google/gemini-1.5-pro",
+  };
+
+  return {
+    reasoningModel: resolveModel(profile.reasoningModel, defaults.reasoning),
+    contextModel: resolveModel(profile.contextModel, defaults.context),
+    executionModel: resolveModel(profile.executionModel, defaults.execution),
+    reviewModel: resolveModel(profile.reviewModel, defaults.review),
+    heartbeatModel: nonEmpty(profile.heartbeatModel) ?? defaults.heartbeat,
+  };
+}
+
+function needsContextPhase(taskPrompt: string, contextRefs: string[]): { include: boolean; reason: string } {
+  if (contextRefs.length > 0) {
+    return { include: true, reason: "context refs provided" };
+  }
+  const prompt = taskPrompt.toLowerCase();
+  const contextKeywords = [
+    "document",
+    "contract",
+    "spec",
+    "review",
+    "analyze",
+    "analysis",
+    "compare",
+    "research",
+    "dataset",
+    "file",
+    "pdf",
+    "transcript",
+    "evidence",
+    "report",
+    "context",
+  ];
+  if (contextKeywords.some((keyword) => prompt.includes(keyword))) {
+    return { include: true, reason: "task indicates context-heavy work" };
+  }
+  return { include: false, reason: "task appears directly executable" };
+}
+
+function buildLocalOrchestrationPlan(params: {
+  taskPrompt: string;
+  contextRefs: string[];
+  profile: OrchestrationModelProfile;
+}): { promptBlock: string; planPayload: Record<string, unknown> } {
+  const contextDecision = needsContextPhase(params.taskPrompt, params.contextRefs);
+  const promptLower = params.taskPrompt.toLowerCase();
+  const contextFirstSignals = ["review", "analyze", "audit", "read", "compare", "summarize", "synthesize"];
+  const runContextFirst = contextDecision.include && contextFirstSignals.some((token) => promptLower.includes(token));
+
+  const sequence: Array<{ role: string; model: string; objective: string }> = [];
+  if (runContextFirst) {
+    sequence.push({
+      role: "context",
+      model: params.profile.contextModel,
+      objective: "Gather and structure relevant context before deeper reasoning.",
+    });
+    sequence.push({
+      role: "reasoning",
+      model: params.profile.reasoningModel,
+      objective: "Decide the execution strategy from gathered context and task intent.",
+    });
+  } else {
+    sequence.push({
+      role: "reasoning",
+      model: params.profile.reasoningModel,
+      objective: "Decide the task plan, constraints, and completion criteria.",
+    });
+    if (contextDecision.include) {
+      sequence.push({
+        role: "context",
+        model: params.profile.contextModel,
+        objective: "Load and verify supporting context required by the reasoning phase.",
+      });
+    }
+  }
+
+  sequence.push({
+    role: "execution",
+    model: params.profile.executionModel,
+    objective: "Produce the requested output deterministically and efficiently.",
+  });
+  sequence.push({
+    role: "review",
+    model: params.profile.reviewModel,
+    objective: "Validate output against intent; if quality fails, iterate within limits before escalation.",
+  });
+
+  const reviewEnabled = true;
+  const reviewMaxLoops = 2;
+  const decisionReason = runContextFirst
+    ? `${contextDecision.reason}; context-first sequencing selected`
+    : `${contextDecision.reason}; reasoning-first sequencing selected`;
+
+  const promptBlock = stringifyPlanForPrompt({
+    sequence,
+    reviewEnabled,
+    reviewMaxLoops,
+    reviewModel: params.profile.reviewModel,
+    decisionReason,
+  });
+
+  return {
+    promptBlock,
+    planPayload: {
+      sequence,
+      reviewLoop: {
+        enabled: reviewEnabled,
+        maxLoops: reviewMaxLoops,
+        reviewerModel: params.profile.reviewModel,
+      },
+      decision: {
+        includeContextPhase: contextDecision.include,
+        reason: decisionReason,
+      },
+      modelProfile: {
+        reasoningModel: params.profile.reasoningModel,
+        contextModel: params.profile.contextModel,
+        executionModel: params.profile.executionModel,
+        reviewModel: params.profile.reviewModel,
+        heartbeatModel: params.profile.heartbeatModel,
+      },
+    },
   };
 }
 
@@ -1065,8 +1281,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   });
 
   const templateMessage = nonEmpty(payloadTemplate.message) ?? nonEmpty(payloadTemplate.text);
-  const message = templateMessage ? appendWakeText(templateMessage, wakeText) : wakeText;
+  let message = templateMessage ? appendWakeText(templateMessage, wakeText) : wakeText;
   const paperclipPayload = buildStandardPaperclipPayload(ctx, wakePayload, paperclipEnv, payloadTemplate);
+
+  const dprId = resolveLisaDprId(ctx);
+  if (dprId === "INT-MNG-260311-0001-LISA") {
+    const taskPrompt = resolveTaskPrompt(ctx, templateMessage, wakeText);
+    const contextRefs = resolveContextRefs(ctx);
+    const plan = buildLocalOrchestrationPlan({
+      taskPrompt,
+      contextRefs,
+      profile: resolveOrchestrationModelProfile(ctx),
+    });
+    message = `${plan.promptBlock}\n\n${message}`;
+    paperclipPayload.orchestrationPlan = plan.planPayload;
+    await ctx.onLog(
+      "stdout",
+      "[openclaw-gateway] local orchestration plan injected for Lisa run (no external orchestration API call)\n",
+    );
+  }
 
   const agentParams: Record<string, unknown> = {
     ...payloadTemplate,
@@ -1344,11 +1577,36 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         asRecord(mergedMeta.agentMeta) ??
         asRecord(acceptedMeta?.agentMeta) ??
         asRecord(latestMeta?.agentMeta);
-      const usage = parseUsage(agentMeta?.usage ?? mergedMeta.usage);
+      const usage =
+        parseUsage(
+          agentMeta?.usage ??
+            mergedMeta.usage ??
+            latestResult?.usage ??
+            latestPayload?.usage ??
+            asRecord(latestPayload?.result)?.usage,
+        ) ??
+        parseUsage(asRecord(latestPayload?.result)?.meta);
       const runtimeServices = extractRuntimeServicesFromMeta(agentMeta ?? mergedMeta);
-      const provider = nonEmpty(agentMeta?.provider) ?? nonEmpty(mergedMeta.provider) ?? "openclaw";
-      const model = nonEmpty(agentMeta?.model) ?? nonEmpty(mergedMeta.model) ?? null;
-      const costUsd = asNumber(agentMeta?.costUsd ?? mergedMeta.costUsd, 0);
+      const provider =
+        nonEmpty(agentMeta?.provider) ??
+        nonEmpty(mergedMeta.provider) ??
+        nonEmpty(latestResult?.provider) ??
+        nonEmpty(latestPayload?.provider) ??
+        "openclaw";
+      const model =
+        nonEmpty(agentMeta?.model) ??
+        nonEmpty(mergedMeta.model) ??
+        nonEmpty(latestResult?.model) ??
+        nonEmpty(latestPayload?.model) ??
+        null;
+      const costUsd = asNumber(
+        agentMeta?.costUsd ??
+          mergedMeta.costUsd ??
+          latestResult?.costUsd ??
+          latestPayload?.costUsd ??
+          asRecord(latestPayload?.result)?.costUsd,
+        0,
+      );
 
       await ctx.onLog(
         "stdout",

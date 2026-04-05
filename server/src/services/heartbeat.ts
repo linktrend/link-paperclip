@@ -354,6 +354,15 @@ function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+function resolveLisaHeartbeatModelFromConfig(config: Record<string, unknown>): string | null {
+  const explicit = readNonEmptyString(config.heartbeatModel);
+  if (explicit) return explicit;
+  const profile = parseObject(config.orchestrationModelProfile);
+  const fromProfile = readNonEmptyString(profile.heartbeatModel);
+  if (fromProfile) return fromProfile;
+  return readNonEmptyString(process.env.LINK_LISA_HEARTBEAT_MODEL) ?? "google/gemini-1.5-pro";
+}
+
 function normalizeLedgerBillingType(value: unknown): BillingType {
   const raw = readNonEmptyString(value);
   switch (raw) {
@@ -2294,10 +2303,23 @@ export function heartbeatService(db: Db) {
       executionRunConfig,
     );
     const runtimeSkillEntries = await companySkills.listRuntimeSkillEntries(agent.companyId);
-    const runtimeConfig = {
+    const runtimeConfig: Record<string, unknown> & { paperclipRuntimeSkills: typeof runtimeSkillEntries } = {
       ...resolvedConfig,
       paperclipRuntimeSkills: runtimeSkillEntries,
     };
+    const dprId =
+      readNonEmptyString((context as Record<string, unknown>).dpr_id) ??
+      readNonEmptyString((context as Record<string, unknown>).dprId);
+    const isLisa = dprId === "INT-MNG-260311-0001-LISA";
+    const isHeartbeatOnlyRun =
+      !readNonEmptyString(issueId) &&
+      !readNonEmptyString(taskKey);
+    if (isLisa && isHeartbeatOnlyRun) {
+      const heartbeatModel = resolveLisaHeartbeatModelFromConfig(resolvedConfig);
+      if (heartbeatModel) {
+        runtimeConfig.model = heartbeatModel;
+      }
+    }
     const workspaceOperationRecorder = workspaceOperationsSvc.createRecorder({
       companyId: agent.companyId,
       heartbeatRunId: run.id,

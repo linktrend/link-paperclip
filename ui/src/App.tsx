@@ -39,6 +39,9 @@ import { RunTranscriptUxLab } from "./pages/RunTranscriptUxLab";
 import { OrgChart } from "./pages/OrgChart";
 import { NewAgent } from "./pages/NewAgent";
 import { PersonaControl } from "./pages/PersonaControl";
+import { LiNKskillsControlPage } from "./pages/LiNKskillsControl";
+import { LiNKbrainViewPage } from "./pages/LiNKbrainView";
+import { AgentUiHubPage } from "./pages/AgentUiHub";
 import { AuthPage } from "./pages/Auth";
 import { BoardClaimPage } from "./pages/BoardClaim";
 import { CliAuthPage } from "./pages/CliAuth";
@@ -121,7 +124,11 @@ function boardRoutes() {
   return (
     <>
       <Route index element={<Navigate to="dashboard" replace />} />
+      <Route path="home" element={<Navigate to="../dashboard" replace />} />
       <Route path="dashboard" element={<Dashboard />} />
+      <Route path="linkskills" element={<LiNKskillsControlPage />} />
+      <Route path="linkbrain" element={<LiNKbrainViewPage />} />
+      <Route path="agent-ui" element={<AgentUiHubPage />} />
       <Route path="onboarding" element={<OnboardingRoutePage />} />
       <Route path="companies" element={<Companies />} />
       <Route path="company/settings" element={<CompanySettings />} />
