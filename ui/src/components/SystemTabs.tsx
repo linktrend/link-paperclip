@@ -51,7 +51,7 @@ export function SystemTabs() {
     },
     {
       key: "agent-ui",
-      label: "Agent UI",
+      label: "Agents UI",
       to: `${base}/agent-ui`,
       isActive: (pathname) => pathname.includes("/agent-ui")
     }
@@ -91,6 +91,12 @@ export function SystemTabs() {
             </Link>
           );
         })}
+        <a
+          href="/oauth2/sign_out"
+          className="rounded-md border border-transparent px-3 py-1.5 text-sm font-medium no-underline text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        >
+          Logout
+        </a>
       </nav>
     </div>
   );

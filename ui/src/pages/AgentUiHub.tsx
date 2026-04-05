@@ -25,6 +25,17 @@ function toDashboardUrl(wsUrl: string) {
   }
 }
 
+function toManagedDashboardUrl(agentName: string): string | null {
+  const normalized = agentName.trim().toLowerCase();
+  if (normalized === "lisa") {
+    return "/agents-ui/lisa/chat?session=main";
+  }
+  if (normalized === "eric") {
+    return "/agents-ui/eric/chat?session=main";
+  }
+  return null;
+}
+
 function resolveOpenClawUi(agent: Agent): { dashboardUrl: string | null; token: string | null; warning: string | null } {
   const config = asRecord(agent.adapterConfig);
   if (!config) {
@@ -33,7 +44,7 @@ function resolveOpenClawUi(agent: Agent): { dashboardUrl: string | null; token: 
   const wsUrl = stringValue(config.url);
   const headers = asRecord(config.headers);
   const token = stringValue(headers?.["x-openclaw-token"]) ?? stringValue(headers?.["x-openclaw-auth"]);
-  const dashboardUrl = wsUrl ? toDashboardUrl(wsUrl) : null;
+  const dashboardUrl = toManagedDashboardUrl(agent.name) ?? (wsUrl ? toDashboardUrl(wsUrl) : null);
   if (!dashboardUrl) {
     return { dashboardUrl: null, token, warning: "Gateway URL not configured" };
   }
@@ -62,7 +73,7 @@ export function AgentUiHubPage() {
   if (!selectedCompanyId) {
     return (
       <div className="mx-auto max-w-3xl py-10">
-        <h1 className="text-xl font-semibold">Agent UI</h1>
+        <h1 className="text-xl font-semibold">Agents UI</h1>
         <p className="mt-2 text-sm text-muted-foreground">Select a company to view agent runtimes.</p>
       </div>
     );
@@ -71,7 +82,7 @@ export function AgentUiHubPage() {
   return (
     <div className="mx-auto max-w-6xl space-y-5 py-4">
       <div>
-        <h1 className="text-2xl font-semibold">Agent UI</h1>
+        <h1 className="text-2xl font-semibold">Agents UI</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Runtime entrypoints by agent. OpenClaw agents open directly to their own dashboard.
         </p>
