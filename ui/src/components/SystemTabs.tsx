@@ -93,7 +93,7 @@ export function SystemTabs() {
         })}
         <a
           href="/oauth2/sign_out"
-          className="rounded-md border border-transparent px-3 py-1.5 text-sm font-medium no-underline text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          className="ml-1 rounded-md border border-red-800/70 bg-red-950/40 px-3 py-1.5 text-sm font-semibold no-underline text-red-200 transition-colors hover:border-red-600 hover:bg-red-900/60 hover:text-red-100"
         >
           Logout
         </a>
