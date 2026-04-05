@@ -5,6 +5,7 @@ type TabItem = {
   key: "home" | "paperclip" | "linkskills" | "linkbrain" | "agent-ui";
   label: string;
   to: string;
+  external?: boolean;
   isActive: (pathname: string) => boolean;
 };
 
@@ -26,13 +27,13 @@ export function SystemTabs() {
   const tabs: TabItem[] = [
     {
       key: "home",
-      label: "Home",
+      label: "LiNKaios Home",
       to: `${base}/home`,
       isActive: (pathname) => pathname.endsWith("/home")
     },
     {
       key: "paperclip",
-      label: "Paperclip",
+      label: "Operations",
       to: `${base}/dashboard`,
       isActive: (pathname) => isPaperclipPath(pathname)
     },
@@ -61,16 +62,30 @@ export function SystemTabs() {
       <nav className="flex items-center gap-1 overflow-x-auto py-2">
         {tabs.map((tab) => {
           const active = tab.isActive(location.pathname);
+          const className = cn(
+            "rounded-md border px-3 py-1.5 text-sm font-medium no-underline transition-colors",
+            active
+              ? "border-orange-500 bg-orange-500/10 text-orange-600 dark:text-orange-400"
+              : "border-transparent text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+          );
+
+          if (tab.key === "home") {
+            return (
+              <a
+                key={tab.key}
+                href={tab.to}
+                className={className}
+              >
+                {tab.label}
+              </a>
+            );
+          }
+
           return (
             <Link
               key={tab.key}
               to={tab.to}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-sm font-medium no-underline transition-colors",
-                active
-                  ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-              )}
+              className={className}
             >
               {tab.label}
             </Link>

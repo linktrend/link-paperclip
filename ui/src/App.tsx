@@ -39,7 +39,6 @@ import { RunTranscriptUxLab } from "./pages/RunTranscriptUxLab";
 import { OrgChart } from "./pages/OrgChart";
 import { NewAgent } from "./pages/NewAgent";
 import { PersonaControl } from "./pages/PersonaControl";
-import { HomeHub } from "./pages/HomeHub";
 import { LiNKskillsControlPage } from "./pages/LiNKskillsControl";
 import { LiNKbrainViewPage } from "./pages/LiNKbrainView";
 import { AgentUiHubPage } from "./pages/AgentUiHub";
@@ -124,8 +123,8 @@ function CloudAccessGate() {
 function boardRoutes() {
   return (
     <>
-      <Route index element={<Navigate to="home" replace />} />
-      <Route path="home" element={<HomeHub />} />
+      <Route index element={<Navigate to="dashboard" replace />} />
+      <Route path="home" element={<Navigate to="../dashboard" replace />} />
       <Route path="dashboard" element={<Dashboard />} />
       <Route path="linkskills" element={<LiNKskillsControlPage />} />
       <Route path="linkbrain" element={<LiNKbrainViewPage />} />
